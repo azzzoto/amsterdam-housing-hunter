@@ -59,7 +59,9 @@ Every authorized `/start` shows the Italian onboarding guide, the public-site an
 
 The numeric IDs in `TELEGRAM_ADMIN_IDS` are admins. Other accounts receive no listing or profile data until an admin creates a one-time code with `/generate_code user` and the user redeems it using `/login CODE`. Codes expire after 24 hours and are stored hashed. Admins can revoke with `/revoke_user ID`.
 
-Commands: `/start`, `/login`, `/logout`, `/profile`, `/status`, `/latest`, `/history [days] [count]`, `/stats`, `/sources`, `/settings`, `/pause`, `/resume`, `/admin`, `/generate_code`, `/revoke_user`, `/help`.
+Commands: `/start`, `/login`, `/logout`, `/profile`, `/status`, `/latest`, `/history [days] [count]`, `/stats`, `/sources`, `/settings`, `/pause`, `/resume`, `/admin`, `/users` (admin user list and last activity), `/generate_code`, `/revoke_user`, `/help`.
+
+Admins can use `/users` to view the Telegram ID, username, authorization state, registration time, and most recent bot interaction for accounts that have started the bot. It cannot list people who have never opened the bot.
 
 Every authorized `/start` shows the Italian onboarding guide and main command keyboard. First authorization also shows the five newest listings detected in the past three days. `/history` defaults to the saved per-user result limit (10 initially); `/settings history_limit 20` changes it from 1–50. `/history 7 20` overrides the history window and count for one request. `/latest` shows the five newest records regardless of age.
 

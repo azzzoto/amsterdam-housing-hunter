@@ -22,6 +22,7 @@ ITALIAN_COMMANDS = [
     BotCommand("pause", "Metti in pausa il monitoraggio (admin)"),
     BotCommand("resume", "Riavvia il monitoraggio (admin)"),
     BotCommand("admin", "Comandi amministratore"),
+    BotCommand("users", "Elenco utenti e ultima attività (admin)"),
     BotCommand("generate_code", "Genera un codice di accesso (admin)"),
     BotCommand("revoke_user", "Revoca l'accesso a un utente (admin)"),
     BotCommand("help", "Mostra l'elenco dei comandi"),
@@ -45,6 +46,7 @@ def create_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("pause", commands.pause))
     application.add_handler(CommandHandler("resume", commands.resume))
     application.add_handler(CommandHandler("admin", commands.admin))
+    application.add_handler(CommandHandler("users", commands.users_command))
     application.add_handler(CommandHandler("generate_code", commands.generate_code))
     application.add_handler(CommandHandler("revoke_user", commands.revoke_user))
     application.add_handler(CommandHandler("help", commands.help_command))

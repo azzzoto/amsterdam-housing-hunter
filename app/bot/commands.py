@@ -87,6 +87,7 @@ async def _require_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
         _db(context).add_user_if_missing(user.id, user.username, role="admin", authorized=True)
     saved = _db(context).get_user(user.id)
     if saved and saved["authorized"]:
+        _db(context).touch_user(user.id)
         return True
     if update.effective_message:
         await update.effective_message.reply_text("Per usare il bot devi essere autorizzato. Chiedi all'amministratore un codice monouso e invia /login CODICE.")
@@ -308,7 +309,42 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text("Comando riservato agli amministratori.")
         return
     users = _db(context).authorized_users()
-    await update.effective_message.reply_text(f"Comandi amministratore\nUtenti autorizzati: {len(users)}\n/generate_code [user|admin]\n/revoke_user ID_TELEGRAM")
+    await update.effective_message.reply_text(f"Comandi amministratore\nUtenti autorizzati: {len(users)}\n/users — elenco account e ultima attività\n/generate_code [user|admin]\n/revoke_user ID_TELEGRAM")
+
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_auth(update, context):
+        return
+    if not _is_admin(update, context):
+        await update.effective_message.reply_text("Comando riservato agli amministratori.")
+        return
+
+    users = _db(context).user_rows()
+    if not users:
+        await update.effective_message.reply_text("Nessun utente ha ancora avviato il bot.")
+        return
+
+    lines = [f"Account noti al bot: {len(users)}"]
+    for user in users:
+        username = f"@{user['username']}" if user["username"] else "senza username"
+        role = "admin" if user["role"] == "admin" else "utente"
+        access = "autorizzato" if user["authorized"] else "non autorizzato/revocato"
+        last_seen = user["last_interaction_at"] or "mai"
+        lines.append(
+            f"\n{username} · ID {user['telegram_id']} · {role} · {access}"
+            f"\nUltima attività: {last_seen}"
+        )
+
+    chunk = ""
+    for line in lines:
+        candidate = f"{chunk}\n{line}" if chunk else line
+        if len(candidate) > 3500 and chunk:
+            await update.effective_message.reply_text(chunk)
+            chunk = line
+        else:
+            chunk = candidate
+    if chunk:
+        await update.effective_message.reply_text(chunk)
 
 
 async def generate_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,6 +394,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/settings — visualizza o modifica le preferenze; max_monthly filtra gli avvisi, history_limit imposta quanti annunci mostrare\n"
         "/pause, /resume — comandi admin per il monitoraggio\n"
         "/admin — comandi amministratore\n"
+        "/users — elenco account e ultima attività (solo admin)\n"
         "/generate_code [user|admin] — solo admin\n"
         "/revoke_user ID — solo admin\n"
         "/help — mostra queste istruzioni"
@@ -367,6 +404,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     label = update.effective_message.text if update.effective_message else ""
+    user = update.effective_user
+    if user and _authorized(update, context):
+        _db(context).touch_user(user.id)
     action = MAIN_MENU_LABELS.get(label)
     handlers = {
         "latest": latest,
@@ -390,6 +430,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not user or not user["authorized"]:
         await query.answer("Devi essere autorizzato per usare questo pulsante.", show_alert=True)
         return
+    db.touch_user(query.from_user.id)
     try:
         action, listing_id = query.data.split(":", 1)
     except (AttributeError, ValueError):

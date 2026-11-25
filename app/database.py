@@ -331,6 +331,21 @@ class Database:
             output.append(item)
         return output
 
+    def user_rows(self) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT telegram_id,username,role,authorized,registered_at,last_interaction_at "
+                "FROM users ORDER BY authorized DESC, COALESCE(last_interaction_at,registered_at) DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def touch_user(self, telegram_id: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                "UPDATE users SET last_interaction_at=? WHERE telegram_id=?",
+                (iso_now(), telegram_id),
+            )
+
     def revoke_user(self, telegram_id: int) -> bool:
         with self.lock:
             cursor = self.conn.execute("UPDATE users SET authorized=0 WHERE telegram_id=?", (telegram_id,))
