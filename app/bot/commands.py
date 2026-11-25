@@ -24,7 +24,7 @@ def _guide_text() -> str:
     return (
         "🏠 Amsterdam Housing Hunter\n"
         "Cerco monolocali e appartamenti indipendenti, oppure stanze private con al massimo un altro coinquilino. "
-        "Il budget massimo è €1.000 al mese tutto incluso; quello ideale è €950.\n\n"
+        "Il budget massimo predefinito è €1.000 al mese tutto incluso; quello ideale è €950. Puoi modificarli con /settings.\n\n"
         "COME FUNZIONA\n"
         "Controllo le pagine pubbliche consentite, confronto gli annunci per evitare duplicati e calcolo il tragitto reale in bici fino a Singel 460. "
         "Valuto costo, distanza, tipo di alloggio, arredamento, disponibilità, registrazione BRP e completezza dei dati. "
@@ -191,6 +191,11 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     days = 3
     args = context.args or []
+    preferences = _db(context).get_user(update.effective_user.id)["preferences"]
+    limit = int(preferences.get("history_limit", 10))
+    if len(args) > 2:
+        await update.effective_message.reply_text("Uso: /history [giorni] [numero_annunci], ad esempio /history 7 20.")
+        return
     if args:
         try:
             days = int(args[0])
@@ -200,7 +205,16 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not 1 <= days <= 30:
         await update.effective_message.reply_text("Scegli un periodo da 1 a 30 giorni.")
         return
-    await _send_history(update, _db(context), days=days, limit=10)
+    if len(args) == 2:
+        try:
+            limit = int(args[1])
+        except ValueError:
+            await update.effective_message.reply_text("Il numero di annunci deve essere un intero da 1 a 50.")
+            return
+    if not 1 <= limit <= 50:
+        await update.effective_message.reply_text("Il numero di annunci deve essere un intero da 1 a 50.")
+        return
+    await _send_history(update, _db(context), days=days, limit=limit)
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -234,25 +248,36 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     args = context.args or []
     if len(args) == 2:
         key = args[0].lower()
-        aliases = {"budget": "max_monthly", "max_monthly": "max_monthly", "ideal_monthly": "ideal_monthly", "cycling": "max_cycling_minutes", "max_cycling_minutes": "max_cycling_minutes"}
+        aliases = {
+            "budget": "max_monthly", "max_monthly": "max_monthly", "ideal_monthly": "ideal_monthly",
+            "cycling": "max_cycling_minutes", "max_cycling_minutes": "max_cycling_minutes",
+            "history_limit": "history_limit",
+        }
         key = aliases.get(key)
         if key is None:
-            await update.effective_message.reply_text("Impostazioni: /settings max_monthly 1000, /settings ideal_monthly 950 oppure /settings max_cycling_minutes 25")
+            await update.effective_message.reply_text("Impostazioni: /settings max_monthly 1000, /settings ideal_monthly 950, /settings max_cycling_minutes 25 oppure /settings history_limit 20")
             return
         try:
-            value = float(args[1])
-            if value <= 0:
-                raise ValueError
+            if key == "history_limit":
+                value = int(args[1])
+                if not 1 <= value <= 50:
+                    raise ValueError
+            else:
+                value = float(args[1])
+                if value <= 0:
+                    raise ValueError
         except ValueError:
-            await update.effective_message.reply_text("Inserisci un numero maggiore di zero.")
+            message = "Il limite dello storico deve essere un intero da 1 a 50." if key == "history_limit" else "Inserisci un numero maggiore di zero."
+            await update.effective_message.reply_text(message)
             return
         prefs[key] = value
         db.set_preferences(update.effective_user.id, prefs)
     max_monthly = prefs.get("max_monthly", 1000)
     ideal = prefs.get("ideal_monthly", 950)
     cycling = prefs.get("max_cycling_minutes", 25)
+    history_limit = prefs.get("history_limit", 10)
     await update.effective_message.reply_text(
-        f"Preferenze di ricerca\nCittà: Amsterdam\nAlloggi accettati: monolocale/appartamento indipendente o stanza privata con al massimo un altro coinquilino\nBudget ideale tutto incluso: €{ideal:,.0f}/mese\nBudget massimo confermato tutto incluso: €{max_monthly:,.0f}/mese\nTempo massimo preferito in bici: {cycling:g} minuti\nArredamento: qualsiasi (preferito arredato)\nRegistrazione BRP: mostrata, non è un criterio di esclusione\n\nModifica: /settings max_monthly 1000 | /settings ideal_monthly 950 | /settings max_cycling_minutes 25"
+        f"Preferenze di ricerca\nCittà: Amsterdam\nAlloggi accettati: monolocale/appartamento indipendente o stanza privata con al massimo un altro coinquilino\nBudget ideale tutto incluso: €{ideal:,.0f}/mese\nFiltro massimo avvisi: €{max_monthly:,.0f}/mese tutto incluso e confermato\nStorico: mostra fino a {history_limit} annunci\nTempo massimo preferito in bici: {cycling:g} minuti\nArredamento: qualsiasi (preferito arredato)\nRegistrazione BRP: mostrata, non è un criterio di esclusione\n\nGli annunci con costo confermato oltre il limite non generano avvisi. Se il totale non è noto e l'affitto base rientra nel limite, l'annuncio resta visibile come da verificare.\n\nModifica: /settings max_monthly 1000 | /settings ideal_monthly 950 | /settings max_cycling_minutes 25 | /settings history_limit 10"
     )
 
 
@@ -327,10 +352,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/profile — mostra il tuo profilo\n"
         "/status — stato del monitoraggio e delle fonti\n"
         "/latest — ultimi annunci rilevati\n"
-        "/history [giorni] — storico recente, predefinito 3 giorni\n"
+        "/history [giorni] [numero] — storico (3 giorni e 10 annunci predefiniti)\n"
         "/stats — statistiche su fonti e annunci\n"
         "/sources — stato e dettagli delle fonti\n"
-        "/settings — visualizza o modifica le preferenze\n"
+        "/settings — visualizza o modifica le preferenze; max_monthly filtra gli avvisi, history_limit imposta quanti annunci mostrare\n"
         "/pause, /resume — comandi admin per il monitoraggio\n"
         "/admin — comandi amministratore\n"
         "/generate_code [user|admin] — solo admin\n"

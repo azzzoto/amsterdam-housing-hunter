@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from app.bot.commands import help_command, history, menu_text, start
+from app.bot.commands import help_command, history, menu_text, settings_command, start
 from app.models import Listing
 from app.scoring import score_listing
 
@@ -60,6 +60,47 @@ def test_history_command_shows_recent_window(db, scoring_config):
 
     assert "negli ultimi 7 giorni" in message.replies[0][0]
     assert "Room in shared apartment" in message.replies[1][0]
+
+
+def test_history_uses_preference_and_allows_command_override(db, scoring_config):
+    db.ensure_source({"source_id": "pararius", "name": "Pararius", "base_url": "https://pararius.com", "adapter_type": "html", "status": "ACTIVE", "polling_interval_seconds": 120})
+    for n in range(1, 7):
+        listing = Listing(source_id="pararius", source_name="Pararius", url=f"https://pararius.com/listing/{n}", title=f"Studio {n}", city="Amsterdam", base_rent_eur=900, cost_status="BASE_ONLY", property_type="studio")
+        db.upsert_listing(listing, score_listing(listing, scoring_config))
+    db.add_user_if_missing(87, "member", authorized=True)
+    db.set_preferences(87, {"history_limit": 4})
+    message = FakeMessage()
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=87, username="member"), effective_message=message)
+    context = SimpleNamespace(application=SimpleNamespace(bot_data={"db": db, "admin_ids": ()}), args=["7"])
+
+    asyncio.run(history(update, context))
+
+    assert "Te ne mostro 4" in message.replies[0][0]
+    assert len(message.replies) == 5
+
+    message.replies.clear()
+    context.args = ["7", "2"]
+    asyncio.run(history(update, context))
+
+    assert "Te ne mostro 2" in message.replies[0][0]
+    assert len(message.replies) == 3
+
+
+def test_settings_saves_max_budget_filter_and_history_count(db):
+    db.add_user_if_missing(88, "member", authorized=True)
+    message = FakeMessage()
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=88, username="member"), effective_message=message)
+    context = SimpleNamespace(application=SimpleNamespace(bot_data={"db": db, "admin_ids": ()}), args=["max_monthly", "900"])
+
+    asyncio.run(settings_command(update, context))
+
+    prefs = db.get_user(88)["preferences"]
+    assert prefs["max_monthly"] == 900
+    assert "Filtro massimo avvisi: €900/mese" in message.replies[0][0]
+
+    context.args = ["history_limit", "20"]
+    asyncio.run(settings_command(update, context))
+    assert db.get_user(88)["preferences"]["history_limit"] == 20
 
 
 def test_main_menu_history_button_runs_history_command(db, scoring_config):

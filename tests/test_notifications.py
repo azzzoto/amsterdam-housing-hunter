@@ -67,3 +67,22 @@ def test_notifier_skips_rejected_and_proven_out_of_budget_rows(db, scoring_confi
     asyncio.run(notifier(saved["id"], suitable, score_listing(suitable, scoring_config)))
     assert len(bot.sent) == 1
     assert "DA VERIFICARE" in bot.sent[0]["text"]
+
+
+def test_user_monthly_maximum_filters_alerts_and_keeps_uncertain_under_limit(db, scoring_config):
+    db.ensure_source({"source_id": "pararius", "name": "Pararius", "base_url": "https://pararius.com", "adapter_type": "html", "status": "ACTIVE", "polling_interval_seconds": 120})
+    db.add_user_if_missing(2002, "viewer", authorized=True)
+    db.set_preferences(2002, {"max_monthly": 900})
+    bot = FakeBot()
+    notifier = TelegramNotifier(bot, db, scoring_config)
+
+    above = Listing(source_id="pararius", source_name="Pararius", url="https://example.test/above", title="Studio sopra il limite", base_rent_eur=901, cost_status="BASE_ONLY", property_type="studio")
+    saved = db.upsert_listing(above, score_listing(above, scoring_config))
+    asyncio.run(notifier(saved["id"], above, score_listing(above, scoring_config)))
+    assert bot.sent == []
+
+    uncertain = replace(above, url="https://example.test/uncertain", title="Studio da verificare", base_rent_eur=850)
+    saved = db.upsert_listing(uncertain, score_listing(uncertain, scoring_config))
+    asyncio.run(notifier(saved["id"], uncertain, score_listing(uncertain, scoring_config)))
+    assert len(bot.sent) == 1
+    assert "da verificare" in bot.sent[0]["text"].lower()

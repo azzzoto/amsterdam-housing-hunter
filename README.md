@@ -59,11 +59,11 @@ Every authorized `/start` shows the Italian onboarding guide, the public-site an
 
 The numeric IDs in `TELEGRAM_ADMIN_IDS` are admins. Other accounts receive no listing or profile data until an admin creates a one-time code with `/generate_code user` and the user redeems it using `/login CODE`. Codes expire after 24 hours and are stored hashed. Admins can revoke with `/revoke_user ID`.
 
-Commands: `/start`, `/login`, `/logout`, `/profile`, `/status`, `/latest`, `/history [days]`, `/stats`, `/sources`, `/settings`, `/pause`, `/resume`, `/admin`, `/generate_code`, `/revoke_user`, `/help`.
+Commands: `/start`, `/login`, `/logout`, `/profile`, `/status`, `/latest`, `/history [days] [count]`, `/stats`, `/sources`, `/settings`, `/pause`, `/resume`, `/admin`, `/generate_code`, `/revoke_user`, `/help`.
 
-The first authorized `/start` shows the five newest listings detected in the past three days. `/history` shows up to ten and accepts a 1–30 day window, for example `/history 7`. `/latest` shows the five newest records regardless of age.
+Every authorized `/start` shows the Italian onboarding guide and main command keyboard. First authorization also shows the five newest listings detected in the past three days. `/history` defaults to the saved per-user result limit (10 initially); `/settings history_limit 20` changes it from 1–50. `/history 7 20` overrides the history window and count for one request. `/latest` shows the five newest records regardless of age.
 
-`/settings` accepts `max_monthly`, `ideal_monthly`, and `max_cycling_minutes`. Furnishing is a preference, not an exclusion. Unknown utilities, housemates, address, or availability remain pending verification. Only confirmed hard exclusions suppress notifications.
+`/settings` accepts `max_monthly`, `ideal_monthly`, `max_cycling_minutes`, and `history_limit`. `max_monthly` is the per-user maximum confirmed all-inclusive monthly cost for alerts; for example, `/settings max_monthly 900`. Listings with confirmed totals above it are suppressed. If utilities are unknown and base rent is within the limit, the listing remains visible for verification. Furnishing is a preference, not an exclusion. Unknown utilities, housemates, address, or availability remain pending verification.
 
 ## Scoring and routing
 
