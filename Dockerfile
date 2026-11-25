@@ -15,4 +15,7 @@ RUN mkdir -p /app/data /app/backups && useradd --system --uid 10001 --create-hom
     && chown -R appuser:appuser /app
 USER appuser
 
+HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
+    CMD ["python", "-m", "app.main", "--healthcheck"]
+
 CMD ["python", "-m", "app.main"]

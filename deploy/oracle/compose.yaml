@@ -1,0 +1,30 @@
+services:
+  housing-hunter:
+    image: ${HOUSING_IMAGE:?HOUSING_IMAGE must reference a versioned GHCR image}
+    container_name: amsterdam-housing-hunter
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+      DATABASE_URL: sqlite:////app/data/housing.db
+      BACKUP_DIR: /app/backups
+    volumes:
+      - housing-data:/app/data
+      - housing-backups:/app/backups
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.main", "--healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  housing-data:
+  housing-backups:

@@ -1,0 +1,294 @@
+name: Test, publish, and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: Hosting provider to deploy to (repository default uses DEPLOY_TARGET)
+        required: true
+        type: choice
+        default: repository-default
+        options:
+          - repository-default
+          - none
+          - northflank
+          - oracle
+      image_tag:
+        description: Optional existing immutable image tag for rollback (sha- followed by 40 hex characters)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: housing-hunter-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project and test dependencies
+        run: python -m pip install -e '.[test]'
+      - name: Run automated tests
+        run: python -m pytest -q
+      - name: Check application health command
+        run: python -m app.main --healthcheck
+
+  publish-image:
+    name: Build and publish multi-architecture image
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-,format=long
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Publish versioned image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  resolve-deployment:
+    name: Resolve deployment target
+    needs: publish-image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.resolve.outputs.target }}
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+    steps:
+      - name: Select target and immutable image tag
+        id: resolve
+        env:
+          INPUT_TARGET: ${{ inputs.deploy_target }}
+          DEFAULT_TARGET: ${{ vars.DEPLOY_TARGET }}
+          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$INPUT_TARGET" in
+            northflank|oracle) target="$INPUT_TARGET" ;;
+            none) target="" ;;
+            *) target="$DEFAULT_TARGET" ;;
+          esac
+          case "$target" in
+            ""|northflank|oracle) ;;
+            *) echo "DEPLOY_TARGET must be northflank or oracle" >&2; exit 1 ;;
+          esac
+          if [[ -n "$REQUESTED_IMAGE_TAG" ]]; then
+            image_tag="$REQUESTED_IMAGE_TAG"
+          else
+            image_tag="sha-${GITHUB_SHA}"
+          fi
+          if [[ ! "$image_tag" =~ ^sha-[0-9a-f]{40}$ ]]; then
+            echo "Image tag must be sha- followed by a full 40-character commit SHA" >&2
+            exit 1
+          fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+  deploy-northflank:
+    name: Deploy to Northflank
+    needs: [publish-image, resolve-deployment]
+    if: needs.resolve-deployment.outputs.target == 'northflank'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy image and verify rollout
+        env:
+          NORTHFLANK_API_TOKEN: ${{ secrets.NORTHFLANK_API_TOKEN }}
+          NORTHFLANK_PROJECT_ID: ${{ vars.NORTHFLANK_PROJECT_ID }}
+          NORTHFLANK_SERVICE_ID: ${{ vars.NORTHFLANK_SERVICE_ID }}
+          NORTHFLANK_CREDENTIALS_ID: ${{ vars.NORTHFLANK_CREDENTIALS_ID }}
+          IMAGE_TAG: ${{ needs.resolve-deployment.outputs.image_tag }}
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${NORTHFLANK_API_TOKEN:?Set NORTHFLANK_API_TOKEN in GitHub Actions secrets}"
+          : "${NORTHFLANK_PROJECT_ID:?Set NORTHFLANK_PROJECT_ID in GitHub Actions variables}"
+          : "${NORTHFLANK_SERVICE_ID:?Set NORTHFLANK_SERVICE_ID in GitHub Actions variables}"
+          : "${NORTHFLANK_CREDENTIALS_ID:?Save a GHCR pull credential in Northflank and set its ID}"
+          image="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          base="https://api.northflank.com/v1/projects/${NORTHFLANK_PROJECT_ID}/services"
+          body="$(jq -cn --arg image "$image" --arg credentials "$NORTHFLANK_CREDENTIALS_ID" \
+            '{deployment:{instances:1,external:{imagePath:$image,credentials:$credentials},docker:{configType:"default"}}}')"
+          curl --fail-with-body --silent --show-error --request PATCH \
+            --header "Authorization: Bearer ${NORTHFLANK_API_TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data "$body" \
+            "${base}/deployment/${NORTHFLANK_SERVICE_ID}" >/dev/null
+          deadline=$((SECONDS + 600))
+          while (( SECONDS < deadline )); do
+            service="$(curl --fail-with-body --silent --show-error \
+              --header "Authorization: Bearer ${NORTHFLANK_API_TOKEN}" \
+              "${base}/${NORTHFLANK_SERVICE_ID}")"
+            status="$(jq -r '.data.status.deployment.status // "UNKNOWN"' <<<"$service")"
+            deployed_image="$(jq -r '.data.deployment.external.imagePath // ""' <<<"$service")"
+            if [[ "$status" == FAILED ]]; then
+              echo "Northflank reports a failed deployment" >&2
+              exit 1
+            fi
+            if [[ "$status" == COMPLETED && "$deployed_image" == "$image" ]]; then
+              echo "Northflank completed deployment of ${image}"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Northflank to complete deployment of ${image}" >&2
+          exit 1
+
+  deploy-oracle:
+    name: Deploy to Oracle Cloud over SSH
+    needs: [publish-image, resolve-deployment]
+    if: needs.resolve-deployment.outputs.target == 'oracle'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Configure SSH and temporary GHCR credentials
+        id: setup
+        env:
+          ORACLE_HOST: ${{ vars.ORACLE_HOST }}
+          ORACLE_USER: ${{ vars.ORACLE_USER }}
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          ORACLE_KNOWN_HOSTS: ${{ vars.ORACLE_KNOWN_HOSTS }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${ORACLE_HOST:?Set ORACLE_HOST in GitHub Actions variables}"
+          : "${ORACLE_USER:?Set ORACLE_USER in GitHub Actions variables}"
+          : "${ORACLE_SSH_PRIVATE_KEY:?Set ORACLE_SSH_PRIVATE_KEY in GitHub Actions secrets}"
+          : "${ORACLE_KNOWN_HOSTS:?Set a verified host key in ORACLE_KNOWN_HOSTS}"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          export DOCKER_AUTH_DIR="$RUNNER_TEMP/housing-docker-config"
+          mkdir -m 700 "$DOCKER_AUTH_DIR"
+          python3 - <<'PY'
+          import base64, json, os
+          token = os.environ["GHCR_TOKEN"]
+          username = os.environ["GHCR_USERNAME"]
+          auth = base64.b64encode(f"{username}:{token}".encode()).decode()
+          with open(os.path.join(os.environ["DOCKER_AUTH_DIR"], "config.json"), "w") as f:
+              json.dump({"auths": {"ghcr.io": {"auth": auth}}}, f)
+          PY
+          chmod 600 "$DOCKER_AUTH_DIR/config.json"
+          echo "ssh_target=${ORACLE_USER}@${ORACLE_HOST}" >> "$GITHUB_OUTPUT"
+          echo "docker_auth_dir=${DOCKER_AUTH_DIR}" >> "$GITHUB_OUTPUT"
+      - name: Transfer Compose file and one-time registry credential
+        id: transfer
+        env:
+          SSH_TARGET: ${{ steps.setup.outputs.ssh_target }}
+          DOCKER_AUTH_DIR: ${{ steps.setup.outputs.docker_auth_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_auth_dir="/tmp/ahh-docker-config-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh "$SSH_TARGET" "mkdir -p /opt/amsterdam-housing-hunter '$remote_auth_dir' && chmod 700 '$remote_auth_dir'"
+          scp deploy/oracle/compose.yaml "$SSH_TARGET:/opt/amsterdam-housing-hunter/compose.yaml.new"
+          scp "$DOCKER_AUTH_DIR/config.json" "$SSH_TARGET:$remote_auth_dir/config.json"
+          ssh "$SSH_TARGET" "chmod 600 '$remote_auth_dir/config.json' && mv /opt/amsterdam-housing-hunter/compose.yaml.new /opt/amsterdam-housing-hunter/compose.yaml"
+          echo "remote_auth_dir=$remote_auth_dir" >> "$GITHUB_OUTPUT"
+      - name: Pull, restart, and verify the Oracle container
+        env:
+          SSH_TARGET: ${{ steps.setup.outputs.ssh_target }}
+          REMOTE_AUTH_DIR: ${{ steps.transfer.outputs.remote_auth_dir }}
+          IMAGE_TAG: ${{ needs.resolve-deployment.outputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh "$SSH_TARGET" sh -s -- "$IMAGE_TAG" "$REMOTE_AUTH_DIR" <<'REMOTE'
+          set -eu
+          image_tag="$1"
+          auth_dir="$2"
+          case "$image_tag" in
+            sha-????????????????????????????????????????) ;;
+            *) echo "Image tag must contain a full commit SHA" >&2; exit 1 ;;
+          esac
+          case "${image_tag#sha-}" in
+            *[!0-9a-f]*) echo "Invalid commit SHA in image tag" >&2; exit 1 ;;
+          esac
+          app_dir=/opt/amsterdam-housing-hunter
+          test -f "$app_dir/.env" || { echo "Create $app_dir/.env before the first deployment" >&2; exit 1; }
+          trap 'rm -rf "$auth_dir"' EXIT
+          cd "$app_dir"
+          image="ghcr.io/azzzoto/amsterdam-housing-hunter:${image_tag}"
+          compose() {
+            HOUSING_IMAGE="$image" DOCKER_CONFIG="$auth_dir" docker compose -p amsterdam-housing-hunter -f compose.yaml "$@"
+          }
+          compose pull
+          compose up -d --remove-orphans
+          container="$(compose ps -q housing-hunter)"
+          test -n "$container" || { echo "Container was not created" >&2; exit 1; }
+          attempt=0
+          while [ "$attempt" -lt 30 ]; do
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")"
+            case "$health" in
+              healthy) echo "Oracle deployment healthy: $image"; exit 0 ;;
+              unhealthy) echo "Oracle container is unhealthy; inspect docker compose logs" >&2; exit 1 ;;
+            esac
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+          echo "Timed out waiting for the Oracle container health check" >&2
+          exit 1
+          REMOTE
+      - name: Remove temporary runner credentials
+        if: always()
+        env:
+          DOCKER_AUTH_DIR: ${{ steps.setup.outputs.docker_auth_dir }}
+          SSH_TARGET: ${{ steps.setup.outputs.ssh_target }}
+          REMOTE_AUTH_DIR: ${{ steps.transfer.outputs.remote_auth_dir }}
+        run: |
+          if [[ -n "$DOCKER_AUTH_DIR" ]]; then rm -rf -- "$DOCKER_AUTH_DIR"; fi
+          if [[ -n "$SSH_TARGET" && -n "$REMOTE_AUTH_DIR" ]]; then
+            ssh "$SSH_TARGET" "rm -rf -- '$REMOTE_AUTH_DIR'" || true
+          fi

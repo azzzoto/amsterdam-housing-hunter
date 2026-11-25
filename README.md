@@ -113,6 +113,28 @@ docker compose up -d housing-hunter
 
 The automated backup volume is on the same host as the database. For protection against host loss, copy backups to a separate device or object store. The application does not upload data off-host by default.
 
+## GitHub CI/CD and cloud deployment
+
+`.github/workflows/ci-cd.yml` runs the test suite on pull requests and pushes to `main`. After tests pass on `main`, GitHub Actions builds `linux/amd64` and `linux/arm64` images and publishes them to `ghcr.io/azzzoto/amsterdam-housing-hunter`, tagged with the full commit SHA (`sha-<40 hex characters>`), `main`, and `latest`. Production deploys use the immutable SHA tag. GitHub Actions is only the test/build/deploy mechanism: the always-on process is managed by the selected host and does not depend on Actions runners staying alive.
+
+The project has no cloud provider provisioned yet. Until the one-time provider setup below is complete, pushes publish the image but skip cloud deployment; the currently running Docker container remains local to its computer. Once the provider is configured, each successful push to `main` will deploy automatically. The image build excludes `.env` and local database files, and GitHub Actions secrets are never baked into the image.
+
+### Choose one production host
+
+**Northflank:** follow [deploy/northflank/README.md](deploy/northflank/README.md). Create a one-replica deployment service, attach persistent storage at `/app/data`, configure a CMD liveness check running `python -m app.main --healthcheck`, and save a read-only GHCR pull credential in Northflank. In GitHub Actions settings add variable `DEPLOY_TARGET=northflank`, variables `NORTHFLANK_PROJECT_ID`, `NORTHFLANK_SERVICE_ID`, and `NORTHFLANK_CREDENTIALS_ID`, plus secret `NORTHFLANK_API_TOKEN`.
+
+**Oracle Cloud:** follow [deploy/oracle/README.md](deploy/oracle/README.md) and use [deploy/oracle/compose.yaml](deploy/oracle/compose.yaml). Prepare an Ubuntu ARM64 VM, persistent Docker volumes, and `/opt/amsterdam-housing-hunter/.env`. In GitHub Actions settings add `DEPLOY_TARGET=oracle`, variables `ORACLE_HOST`, `ORACLE_USER`, and the verified SSH host key in `ORACLE_KNOWN_HOSTS`, plus secret `ORACLE_SSH_PRIVATE_KEY`. The workflow uses the short-lived repository `GITHUB_TOKEN` only during the image pull, then removes its temporary registry credential.
+
+Set these under repository **Settings → Secrets and variables → Actions**. Provider environment variables such as `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_IDS`, `ORS_API_KEY`, and IMAP credentials belong in the host's secret manager (Northflank) or its protected `.env` file (Oracle), not in GitHub variables or Git. No incoming HTTP port is needed; the bot uses Telegram long polling.
+
+The Northflank workflow updates an existing service and verifies its rollout through the provider API. The Oracle workflow transfers the Compose file, pulls the image, restarts the persistent service, and waits for its container health check to report `healthy`. Both providers need one instance because the current database is SQLite. Northflank's persistent volume must survive deployments; Oracle's named volumes survive container updates and VM restarts as long as the VM/block volume remains. Keep off-host backups for recovery.
+
+### Verify and roll back
+
+After the first configured push, open the repository's **Actions** tab and confirm `Tests`, `Build and publish`, and the selected deployment job succeeded. On the host, confirm the container is healthy and `/status` responds in Telegram. A failed test prevents the image publish and deployment. If a rollout itself fails, Actions marks the deployment failed and shows the provider response/logs.
+
+To roll back, use **Actions → Test, publish, and deploy → Run workflow**, choose `northflank` or `oracle`, and enter a previously published full tag such as `sha-<40-character-commit-sha>`. The workflow deploys that exact image while keeping the persistent database volume. Image rollback does not restore a database backup; use the database recovery steps above only if a schema/data change requires it.
+
 ## Free hosting options
 
 ### Northflank Sandbox

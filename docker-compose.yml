@@ -2,7 +2,7 @@ services:
   housing-hunter:
     build:
       context: .
-    image: amsterdam-housing-hunter:latest
+    image: ${HOUSING_IMAGE:-amsterdam-housing-hunter:latest}
     container_name: amsterdam-housing-hunter
     restart: unless-stopped
     env_file:
