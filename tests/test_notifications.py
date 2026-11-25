@@ -86,3 +86,17 @@ def test_user_monthly_maximum_filters_alerts_and_keeps_uncertain_under_limit(db,
     asyncio.run(notifier(saved["id"], uncertain, score_listing(uncertain, scoring_config)))
     assert len(bot.sent) == 1
     assert "da verificare" in bot.sent[0]["text"].lower()
+
+
+def test_same_listing_initial_alert_is_only_sent_once_per_user(db, scoring_config):
+    db.ensure_source({"source_id": "pararius", "name": "Pararius", "base_url": "https://pararius.com", "adapter_type": "html", "status": "ACTIVE", "polling_interval_seconds": 120})
+    db.add_user_if_missing(2003, "viewer", authorized=True)
+    listing = Listing(source_id="pararius", source_name="Pararius", url="https://example.test/once", title="Studio da notificare", base_rent_eur=900, property_type="studio")
+    saved = db.upsert_listing(listing, score_listing(listing, scoring_config))
+    bot = FakeBot()
+    notifier = TelegramNotifier(bot, db, scoring_config)
+
+    asyncio.run(notifier(saved["id"], listing, score_listing(listing, scoring_config)))
+    asyncio.run(notifier(saved["id"], listing, score_listing(listing, scoring_config)))
+
+    assert len(bot.sent) == 1

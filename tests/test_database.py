@@ -89,7 +89,7 @@ def test_listing_updates_create_distinct_notification_events(db, scoring_config)
     assert db.stats()["alerts_today"] == 2
 
 
-def test_new_cross_platform_source_link_is_preserved_and_reported_as_change(db, scoring_config):
+def test_new_cross_platform_source_link_is_preserved_without_duplicate_alert(db, scoring_config):
     db.ensure_source({"source_id": "pararius", "name": "Pararius", "base_url": "https://pararius.com", "adapter_type": "html", "status": "ACTIVE", "polling_interval_seconds": 120})
     db.ensure_source({"source_id": "iamexpat", "name": "IamExpat", "base_url": "https://iamexpat.nl", "adapter_type": "html", "status": "ACTIVE", "polling_interval_seconds": 300})
     original = make_listing("pararius", "Furnished studio at Singel 460", "https://pararius.com/listing/1")
@@ -97,9 +97,13 @@ def test_new_cross_platform_source_link_is_preserved_and_reported_as_change(db, 
     duplicate = make_listing("iamexpat", "Furnished studio at Singel 460", "https://iamexpat.nl/listing/2")
     update = db.upsert_listing(duplicate, score_listing(duplicate, scoring_config))
     assert update["id"] == saved["id"]
-    assert update["should_notify"]
+    assert update["changed"]
+    assert not update["should_notify"]
     assert "source_url" in update["changes"]
     assert {source["source_id"] for source in db.get_listing(saved["id"])["sources"]} == {"pararius", "iamexpat"}
+
+    repeated = db.upsert_listing(duplicate, score_listing(duplicate, scoring_config))
+    assert not repeated["should_notify"]
 
 
 def test_failed_notification_is_retried_on_next_observation(db, scoring_config):

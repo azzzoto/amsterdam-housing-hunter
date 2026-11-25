@@ -232,23 +232,27 @@ class Database:
                 }
                 if "source_url" in changes:
                     change_details["source_url"] = {"from": None, "to": normalized_url, "source_id": listing.source_id}
+                # Keep cross-platform source links, but don't resend the same
+                # property alert solely because another site has its own URL.
+                notification_change_details = {key: value for key, value in change_details.items() if key != "source_url"}
                 if is_new:
                     event_key = "initial"
+                elif notification_change_details:
+                    event_key = hashlib.sha256(json.dumps(notification_change_details, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:32]
                 else:
-                    event_key = hashlib.sha256(json.dumps(change_details, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:32] if changed else "unchanged"
-                    if not changed:
-                        retry = self.conn.execute(
-                            "SELECT event_key,change_details_json FROM notification_history WHERE listing_id=? AND status='failed' ORDER BY id DESC LIMIT 1",
-                            (listing_id,),
-                        ).fetchone()
-                        if retry:
-                            event_key = str(retry["event_key"])
-                            change_details = json.loads(retry["change_details_json"] or "{}")
+                    event_key = "unchanged"
+                    retry = self.conn.execute(
+                        "SELECT event_key,change_details_json FROM notification_history WHERE listing_id=? AND status='failed' ORDER BY id DESC LIMIT 1",
+                        (listing_id,),
+                    ).fetchone()
+                    if retry:
+                        event_key = str(retry["event_key"])
+                        change_details = json.loads(retry["change_details_json"] or "{}")
                 self.conn.execute("COMMIT")
             except Exception:
                 self.conn.execute("ROLLBACK")
                 raise
-        return {"id": listing_id, "is_new": is_new, "changed": changed, "changes": changes, "change_details": change_details, "event_key": event_key, "should_notify": is_new or changed or event_key != "unchanged", "score": score}
+        return {"id": listing_id, "is_new": is_new, "changed": changed, "changes": changes, "change_details": change_details, "event_key": event_key, "should_notify": is_new or bool(notification_change_details) or event_key != "unchanged", "score": score}
 
     def get_listing(self, listing_id: str) -> dict[str, Any] | None:
         with self.lock:
