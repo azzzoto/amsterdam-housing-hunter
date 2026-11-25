@@ -55,6 +55,8 @@ Without a Telegram token, monitoring still runs and writes to SQLite, but no ale
 
 Open [@amsterdamhousing_bot](https://t.me/amsterdamhousing_bot) in Telegram and send `/start`. The configured admin ID is authorized automatically. On first authorization, the bot sends five recent listings with their original links. Use `/history 7` for up to ten records from the last seven days, or `/latest` for the five newest records. The bot cannot message a user until that user has opened the chat and sent a message.
 
+Every authorized `/start` shows the Italian onboarding guide, the public-site and email-alert coverage, and a persistent keyboard for the latest listings, three-day history, status, sources, settings, and help. `/help` repeats the guide and command list at any time. The keyboard buttons invoke the same authorized commands.
+
 The numeric IDs in `TELEGRAM_ADMIN_IDS` are admins. Other accounts receive no listing or profile data until an admin creates a one-time code with `/generate_code user` and the user redeems it using `/login CODE`. Codes expire after 24 hours and are stored hashed. Admins can revoke with `/revoke_user ID`.
 
 Commands: `/start`, `/login`, `/logout`, `/profile`, `/status`, `/latest`, `/history [days]`, `/stats`, `/sources`, `/settings`, `/pause`, `/resume`, `/admin`, `/generate_code`, `/revoke_user`, `/help`.

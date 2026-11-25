@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from telegram import BotCommand
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from app.bot import commands
 from app.config import Settings
@@ -48,5 +48,6 @@ def create_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("generate_code", commands.generate_code))
     application.add_handler(CommandHandler("revoke_user", commands.revoke_user))
     application.add_handler(CommandHandler("help", commands.help_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, commands.menu_text))
     application.add_handler(CallbackQueryHandler(commands.callback_handler))
     return application

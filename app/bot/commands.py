@@ -3,6 +3,7 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from app.bot.keyboards import MAIN_MENU_LABELS, main_menu_keyboard
 from app.bot.i18n import source_error_it, source_status_it
 from app.bot.notifications import listing_keyboard, notification_text, score_details_text
 
@@ -17,6 +18,34 @@ def _score_from_listing(item: dict) -> dict:
         "data_confidence": item["data_confidence"], "breakdown": item["score_breakdown"], "reasons": item["score_reasons"],
         "missing_information": item["missing_information"], "hard_exclusions": item["hard_exclusions"],
     }
+
+
+def _guide_text() -> str:
+    return (
+        "🏠 Amsterdam Housing Hunter\n"
+        "Cerco monolocali e appartamenti indipendenti, oppure stanze private con al massimo un altro coinquilino. "
+        "Il budget massimo è €1.000 al mese tutto incluso; quello ideale è €950.\n\n"
+        "COME FUNZIONA\n"
+        "Controllo le pagine pubbliche consentite, confronto gli annunci per evitare duplicati e calcolo il tragitto reale in bici fino a Singel 460. "
+        "Valuto costo, distanza, tipo di alloggio, arredamento, disponibilità, registrazione BRP e completezza dei dati. "
+        "Le informazioni mancanti sono segnalate da verificare; ogni avviso mantiene il link originale.\n\n"
+        "SITI\n"
+        "• Ricerca sulle pagine pubbliche: Pararius, IamExpat, Van der Linden e VerhuurtBeter. Il loro stato attuale è visibile con /sources.\n"
+        "• Avvisi email supportati: Pararius, Kamernet, Funda, HuurExpert, RentHunter, Rentwebs, IamExpat, VerhuurtBeter, Van der Linden e Huure. Per importarli serve configurare una casella IMAP e attivare gli avvisi sui singoli siti.\n"
+        "• Kamernet e Funda non vengono letti tramite scraping automatico; Facebook è utilizzabile solo tramite notifiche o inoltri autorizzati.\n"
+        "• Beter.nl è trattato come VerhuurtBeter.\n\n"
+        "Usa i pulsanti qui sotto oppure /help per rivedere queste istruzioni."
+    )
+
+
+def _authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    if not user:
+        return False
+    if user.id in context.application.bot_data["admin_ids"]:
+        return True
+    saved = _db(context).get_user(user.id)
+    return bool(saved and saved["authorized"])
 
 
 async def _send_history(update: Update, db, days: int = 3, limit: int = 5) -> None:
@@ -75,10 +104,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db.add_user_if_missing(user.id, user.username, role="admin" if admin else "user", authorized=admin)
     saved = db.get_user(user.id)
     if saved and saved["authorized"]:
-        stats = db.stats()
         monitoring = "PAUSED" if db.is_paused() else "RUNNING"
         await update.effective_message.reply_text(
-            f"Amsterdam Housing Hunter è pronto.\nMonitoraggio: {'IN PAUSA' if monitoring == 'PAUSED' else 'ATTIVO'}\nFonti funzionanti: {stats['functioning_sources']}/{stats['sources']}\nUsa /latest o /history per vedere gli annunci; /status mostra lo stato delle fonti."
+            f"{_guide_text()}\n\nMonitoraggio: {'IN PAUSA' if monitoring == 'PAUSED' else 'ATTIVO'}.",
+            reply_markup=main_menu_keyboard(),
         )
         if not was_authorized:
             await _send_history(update, db)
@@ -100,7 +129,10 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not role:
         await update.effective_message.reply_text("Il codice non è valido, è scaduto oppure è già stato usato.")
         return
-    await update.effective_message.reply_text(f"Accesso autorizzato come {'amministratore' if role == 'admin' else 'utente'}. Usa /status per vedere lo stato del monitoraggio.")
+    await update.effective_message.reply_text(
+        f"Accesso autorizzato come {'amministratore' if role == 'admin' else 'utente'}.\n{_guide_text()}",
+        reply_markup=main_menu_keyboard(),
+    )
     if not was_authorized:
         await _send_history(update, db)
 
@@ -110,7 +142,11 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user:
         return
     _db(context).revoke_user(user.id)
-    await update.effective_message.reply_text("Il tuo accesso al bot è stato revocato. Per rientrare, usa /login con un nuovo codice.")
+    from telegram import ReplyKeyboardRemove
+    await update.effective_message.reply_text(
+        "Il tuo accesso al bot è stato revocato. Per rientrare, usa /login con un nuovo codice.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
 
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -154,9 +190,10 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_auth(update, context):
         return
     days = 3
-    if context.args:
+    args = context.args or []
+    if args:
         try:
-            days = int(context.args[0])
+            days = int(args[0])
         except ValueError:
             await update.effective_message.reply_text("Uso: /history [giorni], da 1 a 30.")
             return
@@ -194,15 +231,16 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     db = _db(context)
     user = db.get_user(update.effective_user.id)
     prefs = user["preferences"]
-    if len(context.args) == 2:
-        key = context.args[0].lower()
+    args = context.args or []
+    if len(args) == 2:
+        key = args[0].lower()
         aliases = {"budget": "max_monthly", "max_monthly": "max_monthly", "ideal_monthly": "ideal_monthly", "cycling": "max_cycling_minutes", "max_cycling_minutes": "max_cycling_minutes"}
         key = aliases.get(key)
         if key is None:
             await update.effective_message.reply_text("Impostazioni: /settings max_monthly 1000, /settings ideal_monthly 950 oppure /settings max_cycling_minutes 25")
             return
         try:
-            value = float(context.args[1])
+            value = float(args[1])
             if value <= 0:
                 raise ValueError
         except ValueError:
@@ -281,9 +319,41 @@ async def revoke_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "Comandi disponibili\n/start — messaggio iniziale e stato del monitoraggio\n/login CODICE — attiva un account\n/logout — revoca il tuo accesso\n/profile — mostra il tuo profilo\n/status — stato del monitoraggio e delle fonti\n/latest — ultimi annunci rilevati\n/history [giorni] — storico recente (predefinito: 3 giorni)\n/stats — statistiche su fonti e annunci\n/sources — stato di ogni fonte\n/settings — visualizza o modifica le tue preferenze\n/pause, /resume — comandi admin per il monitoraggio\n/admin — comandi amministratore\n/generate_code [user|admin] — solo admin\n/revoke_user ID — solo admin\n/help — mostra questo aiuto\n\nOgni annuncio include il link originale e il pulsante per i dettagli del punteggio."
+        f"{_guide_text()}\n\n"
+        "COMANDI\n"
+        "/start — istruzioni e stato del monitoraggio\n"
+        "/login CODICE — attiva un account\n"
+        "/logout — revoca il tuo accesso\n"
+        "/profile — mostra il tuo profilo\n"
+        "/status — stato del monitoraggio e delle fonti\n"
+        "/latest — ultimi annunci rilevati\n"
+        "/history [giorni] — storico recente, predefinito 3 giorni\n"
+        "/stats — statistiche su fonti e annunci\n"
+        "/sources — stato e dettagli delle fonti\n"
+        "/settings — visualizza o modifica le preferenze\n"
+        "/pause, /resume — comandi admin per il monitoraggio\n"
+        "/admin — comandi amministratore\n"
+        "/generate_code [user|admin] — solo admin\n"
+        "/revoke_user ID — solo admin\n"
+        "/help — mostra queste istruzioni"
     )
-    await update.effective_message.reply_text(text)
+    await update.effective_message.reply_text(text, reply_markup=main_menu_keyboard() if _authorized(update, context) else None)
+
+
+async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    label = update.effective_message.text if update.effective_message else ""
+    action = MAIN_MENU_LABELS.get(label)
+    handlers = {
+        "latest": latest,
+        "history": history,
+        "status": status,
+        "sources": sources,
+        "settings": settings_command,
+        "help": help_command,
+    }
+    handler = handlers.get(action)
+    if handler:
+        await handler(update, context)
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
