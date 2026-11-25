@@ -1,0 +1,1 @@
+"""Amsterdam Housing Hunter."""

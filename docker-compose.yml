@@ -1,0 +1,33 @@
+services:
+  housing-hunter:
+    build:
+      context: .
+    image: amsterdam-housing-hunter:latest
+    container_name: amsterdam-housing-hunter
+    restart: unless-stopped
+    env_file:
+      - path: ${COMPOSE_ENV_FILE:-.env}
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      DATABASE_URL: sqlite:////app/data/housing.db
+      BACKUP_DIR: /app/backups
+    volumes:
+      - housing-data:/app/data
+      - housing-backups:/app/backups
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.main", "--healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  housing-data:
+  housing-backups:

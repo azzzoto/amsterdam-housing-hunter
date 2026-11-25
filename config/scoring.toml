@@ -1,0 +1,47 @@
+[budget]
+ideal_eur = 950
+maximum_eur = 1000
+full_points_through_eur = 850
+
+[cycling]
+maximum_minutes = 25
+preferred_minutes = 20
+full_points_through_minutes = 15
+middle_points_through_minutes = 20
+reference_address = "Belly of the Beast, Singel 460, 1017 AW Amsterdam, Netherlands"
+provider = "openrouteservice"
+profile = "cycling-regular"
+
+[weights]
+monthly_cost = 30
+cycling_time = 25
+accommodation_type = 20
+furnishing = 10
+availability = 5
+registration = 5
+information_completeness = 5
+
+[contributions]
+cost_full = 1.0
+cost_ideal = 0.8333333333333334
+cost_maximum = 0.5
+cycling_full = 1.0
+cycling_16_20 = 0.88
+cycling_21_25 = 0.68
+studio_or_apartment = 1.0
+private_room = 0.85
+furnished = 1.0
+semi_furnished = 0.7
+unfurnished = 0.4
+unknown_furnishing = 0.4
+available_immediately = 1.0
+available_within_7_days = 0.8
+available_within_30_days = 0.4
+registration_allowed = 1.0
+registration_unknown = 0.4
+
+[categories]
+excellent = 90
+very_good = 80
+good = 70
+possible = 60
